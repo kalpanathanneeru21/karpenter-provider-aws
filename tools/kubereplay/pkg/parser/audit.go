@@ -23,6 +23,29 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 )
 
+// stripStatus removes or nullifies the "status" key from a raw JSON object before
+// unmarshaling into a typed Kubernetes struct. This is necessary because audit log
+// requestObjects from server-side apply / strategic-merge patches sometimes encode
+// status as a bare string (e.g. "status": "") which is not valid for typed structs
+// like v1.JobStatus or v1.DeploymentStatus. Since we only need spec for replay,
+// we can safely discard the status field entirely.
+func stripStatus(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		// Not a JSON object (e.g. already a string or array) — return as-is.
+		return raw
+	}
+	delete(m, "status")
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 // Parser extracts workload events from audit logs
 type Parser struct {
 	excludeNamespaces map[string]bool
@@ -147,11 +170,11 @@ func (p *Parser) parseDeploymentEvent(event AuditEvent) (*WorkloadResult, error)
 	// Parse the deployment
 	var deployment appsv1.Deployment
 	if event.ResponseObject != nil {
-		if err := json.Unmarshal(event.ResponseObject, &deployment); err != nil {
+		if err := json.Unmarshal(stripStatus(event.ResponseObject), &deployment); err != nil {
 			return nil, fmt.Errorf("failed to parse deployment from response object: %w", err)
 		}
 	} else if event.RequestObject != nil {
-		if err := json.Unmarshal(event.RequestObject, &deployment); err != nil {
+		if err := json.Unmarshal(stripStatus(event.RequestObject), &deployment); err != nil {
 			return nil, fmt.Errorf("failed to parse deployment from request object: %w", err)
 		}
 	} else {
@@ -262,11 +285,11 @@ func (p *Parser) parseJobEvent(event AuditEvent) (*WorkloadResult, error) {
 
 	var job batchv1.Job
 	if event.ResponseObject != nil {
-		if err := json.Unmarshal(event.ResponseObject, &job); err != nil {
+		if err := json.Unmarshal(stripStatus(event.ResponseObject), &job); err != nil {
 			return nil, fmt.Errorf("failed to parse job from response object: %w", err)
 		}
 	} else if event.RequestObject != nil {
-		if err := json.Unmarshal(event.RequestObject, &job); err != nil {
+		if err := json.Unmarshal(stripStatus(event.RequestObject), &job); err != nil {
 			return nil, fmt.Errorf("failed to parse job from request object: %w", err)
 		}
 	} else {

@@ -68,6 +68,8 @@ type WorkloadEvent struct {
 type ReplayLog struct {
 	Cluster  string          `json:"cluster"`
 	Captured time.Time       `json:"captured"`
+	// Source describes where this log came from (capture, snapshot, merged)
+	Source   string          `json:"source,omitempty"`
 	Events   []WorkloadEvent `json:"events"`
 }
 
@@ -78,6 +80,44 @@ func NewReplayLog(cluster string) *ReplayLog {
 		Captured: time.Now(),
 		Events:   []WorkloadEvent{},
 	}
+}
+
+// Merge combines a snapshot log (baseline, T+0 events) with a capture log
+// (audit events with real timestamps) into a single ReplayLog.
+// Snapshot events are placed before capture events. The capture's timestamps
+// are preserved as-is so timing-based replay works correctly.
+// Duplicate deployments (same sanitized name in both snapshot and capture)
+// are deduplicated — the capture version wins since it has more recent spec.
+func Merge(snapshot, capture *ReplayLog) *ReplayLog {
+	merged := &ReplayLog{
+		Cluster:  capture.Cluster,
+		Captured: capture.Captured,
+		Source:   "merged",
+		Events:   []WorkloadEvent{},
+	}
+
+	// Index capture deployment creates by key so we can detect duplicates
+	captureDeploymentKeys := make(map[string]bool)
+	for _, e := range capture.Events {
+		if e.Type == EventCreate && e.Kind == KindDeployment {
+			captureDeploymentKeys[e.Key] = true
+		}
+	}
+
+	// Add snapshot events first (T+0), skipping any deployment that is also
+	// in the capture (capture has the more recent spec from audit logs)
+	for _, e := range snapshot.Events {
+		if e.Type == EventCreate && e.Kind == KindDeployment && captureDeploymentKeys[e.Key] {
+			// Capture has this deployment — skip snapshot version
+			continue
+		}
+		merged.Events = append(merged.Events, e)
+	}
+
+	// Add all capture events after snapshot baseline
+	merged.Events = append(merged.Events, capture.Events...)
+
+	return merged
 }
 
 // AddDeploymentCreate adds a deployment creation event

@@ -43,18 +43,33 @@ var (
 	captureOutput      string
 	captureDuration    time.Duration
 	captureClusterName string
+	captureWindow      time.Duration
+	captureStartTime   string // RFC3339 e.g. 2026-09-02T06:18:00Z — aligns to Velero backup time
 )
 
 func init() {
 	captureCmd.Flags().StringVarP(&captureOutput, "output", "o", "replay.json", "Output file")
 	captureCmd.Flags().DurationVarP(&captureDuration, "duration", "d", time.Hour, "Duration to capture")
 	captureCmd.Flags().StringVar(&captureClusterName, "cluster-name", "", "EKS cluster name (overrides kubeconfig detection)")
+	captureCmd.Flags().DurationVar(&captureWindow, "window", cloudwatch.DefaultWindowSize, "Time window per CloudWatch Logs Insights query (reduce if hitting 10k result cap)")
+	captureCmd.Flags().StringVar(&captureStartTime, "start-time", "", "Capture window start time in RFC3339 (e.g. 2026-09-02T06:18:00Z). Defaults to now-duration. Use to align with a Velero backup timestamp.")
 }
 
 func runCapture(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	endTime := time.Now()
-	startTime := endTime.Add(-captureDuration)
+
+	var startTime, endTime time.Time
+	if captureStartTime != "" {
+		var err error
+		startTime, err = time.Parse(time.RFC3339, captureStartTime)
+		if err != nil {
+			return fmt.Errorf("invalid --start-time %q (expected RFC3339, e.g. 2026-09-02T06:18:00Z): %w", captureStartTime, err)
+		}
+		endTime = startTime.Add(captureDuration)
+	} else {
+		endTime = time.Now()
+		startTime = endTime.Add(-captureDuration)
+	}
 
 	cluster := captureClusterName
 	if cluster == "" {
@@ -71,6 +86,7 @@ func runCapture(cmd *cobra.Command, args []string) error {
 	}
 
 	cwClient := cloudwatch.NewClient(cloudwatchlogs.NewFromConfig(cfg), cluster)
+	cwClient.WindowSize = captureWindow
 	p := parser.NewParser()
 	san := sanitizer.New()
 	replayLog := format.NewReplayLog(cluster)

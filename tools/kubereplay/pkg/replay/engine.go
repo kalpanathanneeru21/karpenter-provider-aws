@@ -38,6 +38,13 @@ type Engine struct {
 	kubeClient client.Client
 	namespace  string
 	speed      float64 // replay speed for scaling job durations
+	// NodePool, if set, is the taint key on the target nodes (e.g. "kaas.acquia.io/kubereplay").
+	// Injected as a NoSchedule toleration into every replayed workload so pods land only on
+	// the isolated pool. For SimplePool-based clusters the taint key differs from the pool name.
+	NodePool string
+	// NodePoolName, if set, overrides the karpenter.sh/nodepool nodeSelector value.
+	// Defaults to NodePool when not set (for plain NodePool usage where taint key == pool name).
+	NodePoolName string
 	// deploymentNames maps original key to replayed deployment name
 	deploymentNames map[string]string
 }
@@ -50,6 +57,42 @@ func NewEngine(kubeClient client.Client, namespace string) *Engine {
 		speed:           1.0,
 		deploymentNames: make(map[string]string),
 	}
+}
+
+// injectNodePool adds a toleration and nodeSelector for the target NodePool to a
+// PodSpec so pods land exclusively on nodes provisioned by that pool.
+// NodePool is used as the NoSchedule taint key.
+// NodePoolName (if set) is used as the karpenter.sh/nodepool nodeSelector value —
+// this handles SimplePool clusters where the taint key (kaas.acquia.io/kubereplay)
+// differs from the generated NodePool name (e.g. kubereplay-42).
+func (e *Engine) injectNodePool(spec *corev1.PodSpec) {
+	if e.NodePool == "" {
+		return
+	}
+	// Toleration for the NoSchedule taint on target nodes
+	taint := corev1.Toleration{
+		Key:      e.NodePool,
+		Operator: corev1.TolerationOpEqual,
+		Value:    "true",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}
+	// Only add if not already present
+	for _, t := range spec.Tolerations {
+		if t.Key == taint.Key && t.Effect == taint.Effect {
+			return
+		}
+	}
+	spec.Tolerations = append(spec.Tolerations, taint)
+
+	// nodeSelector — use NodePoolName if set, otherwise fall back to NodePool
+	poolName := e.NodePoolName
+	if poolName == "" {
+		poolName = e.NodePool
+	}
+	if spec.NodeSelector == nil {
+		spec.NodeSelector = map[string]string{}
+	}
+	spec.NodeSelector["karpenter.sh/nodepool"] = poolName
 }
 
 // RunTimed creates workloads according to their original timing with optional time dilation.
@@ -155,6 +198,9 @@ func (e *Engine) createDeployment(ctx context.Context, deployment *appsv1.Deploy
 	deployCopy.ResourceVersion = ""
 	deployCopy.UID = ""
 
+	// Inject NodePool targeting so pods land on the isolated replay NodePool
+	e.injectNodePool(&deployCopy.Spec.Template.Spec)
+
 	// Track the mapping from original key to new name
 	originalKey := deployment.Namespace + "/" + deployment.Name
 	e.deploymentNames[originalKey] = deployCopy.Name
@@ -180,6 +226,9 @@ func (e *Engine) createJob(ctx context.Context, event *format.WorkloadEvent) (st
 	jobCopy.Namespace = e.namespace
 	jobCopy.ResourceVersion = ""
 	jobCopy.UID = ""
+
+	// Inject NodePool targeting so pods land on the isolated replay NodePool
+	e.injectNodePool(&jobCopy.Spec.Template.Spec)
 
 	// Scale job duration by replay speed
 	// If duration is known, use it; otherwise use default 10s

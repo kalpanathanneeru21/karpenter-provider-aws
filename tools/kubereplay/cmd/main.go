@@ -27,14 +27,19 @@ var rootCmd = &cobra.Command{
 and replays them against a Karpenter cluster to test provisioning behavior.
 
 Usage:
-  kubereplay capture -o replay.json
-  kubereplay replay -f replay.json`,
+  kubereplay capture  -o events.json          # capture audit log events
+  kubereplay snapshot --from-velero b.tar.gz  # extract Velero backup as baseline
+  kubereplay merge    --snapshot s.json \
+                      --events e.json         # combine baseline + events
+  kubereplay replay   -f full-replay.json     # replay on cluster`,
 }
 
 func main() {
 	rootCmd.AddCommand(captureCmd)
 	rootCmd.AddCommand(replayCmd)
 	rootCmd.AddCommand(demoCmd)
+	rootCmd.AddCommand(snapshotCmd)
+	rootCmd.AddCommand(mergeCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

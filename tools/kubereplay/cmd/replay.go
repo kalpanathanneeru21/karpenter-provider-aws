@@ -39,10 +39,12 @@ var replayCmd = &cobra.Command{
 }
 
 var (
-	replayFile    string
-	replayDryRun  bool
-	replaySpeed   float64
-	replayTimeout time.Duration
+	replayFile         string
+	replayDryRun       bool
+	replaySpeed        float64
+	replayTimeout      time.Duration
+	replayNodePool     string
+	replayNodePoolName string
 )
 
 func init() {
@@ -50,6 +52,8 @@ func init() {
 	replayCmd.Flags().BoolVar(&replayDryRun, "dry-run", false, "Simulate replay with timing output, no workloads created")
 	replayCmd.Flags().Float64Var(&replaySpeed, "speed", 1.0, "Time dilation factor (e.g., 24 = 24x faster, 24h replays in 1h)")
 	replayCmd.Flags().DurationVar(&replayTimeout, "timeout", 10*time.Minute, "Max time to wait for stabilization (0 to disable)")
+	replayCmd.Flags().StringVar(&replayNodePool, "nodepool", "", "Taint key on target nodes (e.g. kaas.acquia.io/kubereplay). Injects NoSchedule toleration into all workloads.")
+	replayCmd.Flags().StringVar(&replayNodePoolName, "nodepool-name", "", "karpenter.sh/nodepool nodeSelector value. Defaults to --nodepool when not set. Use when SimplePool taint key differs from pool name.")
 }
 
 func runReplay(cmd *cobra.Command, args []string) error {
@@ -87,6 +91,8 @@ func runReplay(cmd *cobra.Command, args []string) error {
 	// Dry-run mode: simulate timing without creating workloads
 	if replayDryRun {
 		engine := replay.NewEngine(nil, sanitizer.Namespace)
+		engine.NodePool = replayNodePool
+		engine.NodePoolName = replayNodePoolName
 		_, err := engine.RunTimed(ctx, replayLog, replaySpeed, true)
 		return err
 	}
@@ -104,6 +110,8 @@ func runReplay(cmd *cobra.Command, args []string) error {
 	}
 
 	engine := replay.NewEngine(kubeClient, sanitizer.Namespace)
+	engine.NodePool = replayNodePool
+	engine.NodePoolName = replayNodePoolName
 
 	// Ensure namespace is ready (wait if terminating, create if missing)
 	if err := engine.EnsureNamespace(ctx); err != nil {
