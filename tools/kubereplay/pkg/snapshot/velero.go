@@ -117,7 +117,7 @@ func FromVeleroArchive(path string, snapshotTime time.Time, nodeCount int, clust
 		if filepath.Ext(hdr.Name) != ".json" {
 			continue
 		}
-		if !strings.Contains(hdr.Name, "/resources/") {
+		if !strings.Contains(hdr.Name, "resources/") {
 			continue
 		}
 
